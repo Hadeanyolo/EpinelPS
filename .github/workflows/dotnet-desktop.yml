@@ -45,6 +45,16 @@ jobs:
     - name: Copy to output
       run: echo ${{ github.workspace }} && md ${{ github.workspace }}/out/ && xcopy /s /e "${{ github.workspace }}\ServerSelector.Desktop\bin\Release\net10.0\win-x64\publish\" "${{ github.workspace }}\out\" && xcopy /s /e "${{ github.workspace }}\EpinelPS\bin\Release\net10.0\win-x64\publish\" "${{ github.workspace }}\out\"  && copy "${{ github.workspace }}\ServerSelector.Desktop\sodium.dll" "${{ github.workspace }}\out\sodium.dll"
   
+    - name: Add upstream gamecommon.json
+      shell: pwsh
+      run: |
+        $comment = Invoke-RestMethod -Uri "https://api.github.com/repos/EpinelPS/EpinelPS/issues/comments/5544085926" -Headers @{ "User-Agent" = "EpinelPS-build" }
+        if ($comment.user.login -ne "MishaProductions") { throw "Unexpected gamecommon.json source author" }
+        $match = [regex]::Match($comment.body, 'contents `(?<json>\{.*?\})`')
+        if (-not $match.Success) { throw "Could not extract gamecommon.json from upstream maintainer comment" }
+        $destination = Join-Path "${{ github.workspace }}" "out\gamecommon.json"
+        [System.IO.File]::WriteAllText($destination, $match.Groups["json"].Value, [System.Text.Encoding]::ASCII)
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -79,6 +89,33 @@ jobs:
     - name: Copy to output
       run: echo ${{ github.workspace }} && cp -R "${{ github.workspace }}/EpinelPS/bin/Release/net10.0/linux-x64/publish/" "${{ github.workspace }}/out/"
   
+    - name: Add upstream gamecommon.json
+      shell: bash
+      run: |
+        python3 - <<'PY'
+        import json
+        import os
+        import pathlib
+        import re
+        import urllib.request
+
+        url = "https://api.github.com/repos/EpinelPS/EpinelPS/issues/comments/5544085926"
+        request = urllib.request.Request(url, headers={"User-Agent": "EpinelPS-build"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            comment = json.load(response)
+
+        if comment.get("user", {}).get("login") != "MishaProductions":
+            raise SystemExit("Unexpected gamecommon.json source author")
+
+        match = re.search(r"contents `(\{.*?\})`", comment.get("body", ""))
+        if not match:
+            raise SystemExit("Could not extract gamecommon.json from upstream maintainer comment")
+
+        destination = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / "out" / "gamecommon.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(match.group(1), encoding="ascii")
+        PY
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       with:
