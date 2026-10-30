@@ -2,6 +2,17 @@ name: Build and publish server
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_existing:
+        description: 'Publish artifacts from an existing successful run (no rebuild)'
+        type: boolean
+        default: false
+      source_run_id:
+        description: 'Source Actions run ID (required when publishing existing artifacts)'
+        type: string
+      release_tag:
+        description: 'New release tag, e.g. v1.0.0 (required when publishing existing artifacts)'
+        type: string
   push:
     tags:
       - 'v*'
@@ -10,6 +21,7 @@ on:
 jobs:
 
   build:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.publish_existing }}
 
     strategy:
       matrix:
@@ -52,6 +64,7 @@ jobs:
         name: Server and Server selector
         path: ${{ github.workspace }}/out/
   serverOnly:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.publish_existing }}
     strategy:
       matrix:
         configuration: [Release]
@@ -120,3 +133,47 @@ jobs:
         files: |
           release/EpinelPS_windows_x64.zip
           release/EpinelPS_linux_x64.zip
+
+  publish_existing:
+    name: Publish existing artifacts without rebuilding
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_existing }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN: ${{ inputs.source_run_id }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+    - name: Validate source run and release tag
+      shell: bash
+      run: |
+        set -euo pipefail
+        [[ "$SOURCE_RUN" =~ ^[0-9]+$ ]] || { echo "::error::source_run_id must be numeric"; exit 1; }
+        [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || { echo "::error::release_tag must look like v1.0.0"; exit 1; }
+        gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq '.conclusion' | grep -qx success || { echo "::error::Source run is not successful"; exit 1; }
+        gh release view "$RELEASE_TAG" >/dev/null 2>&1 && { echo "::error::Release already exists"; exit 1; } || true
+        HEAD_SHA="$(gh api "repos/$GH_REPO/actions/runs/$SOURCE_RUN" --jq '.head_sha')"
+        echo "SOURCE_SHA=$HEAD_SHA" >> "$GITHUB_ENV"
+
+    - name: Download existing Windows and Linux artifacts
+      shell: bash
+      run: |
+        set -euo pipefail
+        gh run download "$SOURCE_RUN" -n "Server and Server selector" -D release/windows
+        gh run download "$SOURCE_RUN" -n "EpinelPS_linux_x64" -D release/linux
+
+    - name: Package release archives
+      shell: bash
+      run: |
+        set -euo pipefail
+        (cd release/windows && zip -qr ../EpinelPS_windows_x64.zip .)
+        (cd release/linux && zip -qr ../EpinelPS_linux_x64.zip .)
+
+    - name: Create GitHub Release
+      shell: bash
+      run: |
+        set -euo pipefail
+        gh release create "$RELEASE_TAG"           release/EpinelPS_windows_x64.zip           release/EpinelPS_linux_x64.zip           --target "$SOURCE_SHA"           --generate-notes           --title "$RELEASE_TAG"
